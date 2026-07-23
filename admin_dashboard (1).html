@@ -1,0 +1,234 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>Cashew Distribution - Admin Dashboard (Private)</title>
+
+<link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
+<script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+
+<style>
+  * { box-sizing: border-box; }
+  body {
+    margin: 0;
+    font-family: -apple-system, Segoe UI, Roboto, Arial, sans-serif;
+    background: #f5f5f0;
+    color: #2c2c2c;
+  }
+  header {
+    background: #2e7d32;
+    color: white;
+    padding: 16px 20px;
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    flex-wrap: wrap;
+    gap: 10px;
+  }
+  header h1 { margin: 0; font-size: 18px; }
+  header .stats { font-size: 13px; opacity: 0.9; }
+
+  #exportBtn {
+    background: white;
+    color: #2e7d32;
+    border: none;
+    padding: 10px 16px;
+    border-radius: 8px;
+    font-weight: 600;
+    font-size: 14px;
+    cursor: pointer;
+  }
+  #exportBtn:disabled { opacity: 0.6; cursor: default; }
+
+  #map { height: 45vh; width: 100%; }
+
+  #tableWrap {
+    padding: 16px;
+    overflow-x: auto;
+  }
+  table {
+    width: 100%;
+    border-collapse: collapse;
+    background: white;
+    font-size: 13px;
+    min-width: 700px;
+  }
+  th, td {
+    padding: 8px 10px;
+    border-bottom: 1px solid #eee;
+    text-align: left;
+    white-space: nowrap;
+  }
+  th {
+    background: #eee;
+    position: sticky;
+    top: 0;
+  }
+  tr:hover { background: #f9f9f9; }
+
+  #loading {
+    padding: 40px;
+    text-align: center;
+    color: #777;
+  }
+</style>
+</head>
+<body>
+
+<header>
+  <div>
+    <h1>🌰 Cashew Distribution — Admin Dashboard</h1>
+    <div class="stats"><span id="recordCount">0</span> records loaded</div>
+  </div>
+  <button id="exportBtn" onclick="exportCSV()" disabled>⬇ Export CSV</button>
+</header>
+
+<div id="map"></div>
+
+<div id="tableWrap">
+  <div id="loading">Loading records...</div>
+  <table id="dataTable" style="display:none;">
+    <thead>
+      <tr>
+        <th>Farmer Name</th>
+        <th>National ID</th>
+        <th>Plants</th>
+        <th>Contact</th>
+        <th>Notes</th>
+        <th>Latitude</th>
+        <th>Longitude</th>
+        <th>GPS Accuracy</th>
+        <th>Submitted At</th>
+      </tr>
+    </thead>
+    <tbody id="tableBody"></tbody>
+  </table>
+</div>
+
+<script src="https://www.gstatic.com/firebasejs/10.12.0/firebase-app-compat.js"></script>
+<script src="https://www.gstatic.com/firebasejs/10.12.0/firebase-firestore-compat.js"></script>
+
+<script>
+// ============================================================
+// PASTE THE SAME FIREBASE CONFIG YOU USED IN data_collector.html
+// ============================================================
+const firebaseConfig = {
+  apiKey: "AIzaSyCbwCbI-1AX7R0aQmMfaTemnkoUtIfGCbU",
+  authDomain: "cashew-distribution.firebaseapp.com",
+  projectId: "cashew-distribution",
+  storageBucket: "cashew-distribution.firebasestorage.app",
+  messagingSenderId: "441564386687",
+  appId: "1:441564386687:web:746433b25e1fc86656b64a",
+  measurementId: "G-V39NSS26FK"
+};
+// ============================================================
+
+firebase.initializeApp(firebaseConfig);
+const db = firebase.firestore();
+const COLLECTION_NAME = "cashew_distributions";
+
+const map = L.map('map').setView([7.8731, 80.7718], 8); // fallback: Sri Lanka center
+L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
+  maxZoom: 19,
+  attribution: '&copy; OpenStreetMap contributors'
+}).addTo(map);
+
+let allRecords = [];
+const markers = [];
+
+db.collection(COLLECTION_NAME).orderBy('submittedAt', 'desc').get()
+  .then((snapshot) => {
+    document.getElementById('loading').style.display = 'none';
+    document.getElementById('dataTable').style.display = 'table';
+    document.getElementById('exportBtn').disabled = false;
+
+    const tbody = document.getElementById('tableBody');
+
+    snapshot.forEach((doc) => {
+      const d = doc.data();
+      allRecords.push(d);
+
+      // Table row
+      const tr = document.createElement('tr');
+      const submitted = d.submittedAt ? d.submittedAt.toDate().toLocaleString() : '(syncing...)';
+      tr.innerHTML = `
+        <td>${escapeHtml(d.farmerName)}</td>
+        <td>${escapeHtml(d.nationalId)}</td>
+        <td>${d.plantCount}</td>
+        <td>${escapeHtml(d.contactNumber || '')}</td>
+        <td>${escapeHtml(d.notes || '')}</td>
+        <td>${d.latitude?.toFixed(6)}</td>
+        <td>${d.longitude?.toFixed(6)}</td>
+        <td>±${d.gpsAccuracyMeters}m</td>
+        <td>${submitted}</td>
+      `;
+      tbody.appendChild(tr);
+
+      // Map marker
+      if (d.latitude && d.longitude) {
+        const marker = L.marker([d.latitude, d.longitude]).addTo(map);
+        marker.bindPopup(`
+          <b>${escapeHtml(d.farmerName)}</b><br>
+          ID: ${escapeHtml(d.nationalId)}<br>
+          Plants: ${d.plantCount}<br>
+          ${d.contactNumber ? 'Contact: ' + escapeHtml(d.contactNumber) + '<br>' : ''}
+          ${d.notes ? 'Notes: ' + escapeHtml(d.notes) : ''}
+        `);
+        markers.push(marker);
+      }
+    });
+
+    document.getElementById('recordCount').textContent = allRecords.length;
+
+    if (markers.length > 0) {
+      const group = L.featureGroup(markers);
+      map.fitBounds(group.getBounds(), { padding: [30, 30] });
+    }
+  })
+  .catch((err) => {
+    document.getElementById('loading').textContent = 'Error loading data: ' + err.message;
+  });
+
+function escapeHtml(str) {
+  if (str === null || str === undefined) return '';
+  return String(str)
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;');
+}
+
+function exportCSV() {
+  if (allRecords.length === 0) return;
+
+  const headers = ['Farmer Name', 'National ID', 'Plants', 'Contact', 'Notes', 'Latitude', 'Longitude', 'GPS Accuracy (m)', 'Submitted At'];
+  const rows = allRecords.map(d => [
+    d.farmerName,
+    d.nationalId,
+    d.plantCount,
+    d.contactNumber || '',
+    (d.notes || '').replace(/,/g, ';'),
+    d.latitude,
+    d.longitude,
+    d.gpsAccuracyMeters,
+    d.submittedAt ? d.submittedAt.toDate().toISOString() : ''
+  ]);
+
+  let csv = headers.join(',') + '\n';
+  rows.forEach(row => {
+    csv += row.map(v => `"${String(v).replace(/"/g, '""')}"`).join(',') + '\n';
+  });
+
+  const blob = new Blob([csv], { type: 'text/csv;charset=utf-8;' });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  a.href = url;
+  a.download = `cashew_distribution_${new Date().toISOString().slice(0,10)}.csv`;
+  a.click();
+  URL.revokeObjectURL(url);
+}
+</script>
+
+</body>
+</html>
